@@ -339,12 +339,18 @@ export class Mention extends Module<MentionOption> {
     return true
   }
 
-  escapeHandler() {
+  escapeHandler(range: Range, context: { event: KeyboardEvent }) {
     if (this.isOpen) {
       if (this.existingSourceExecutionToken) {
         this.existingSourceExecutionToken.abandoned = true
       }
       this.hideMentionList()
+      // Rfice :: Stop event propagation to prevent ESC from reaching parent
+      // esc 버튼을 눌렀을 떄 채팅방이 닫히는 것을 막기 위함
+      if (context?.event) {
+        context.event.stopPropagation()
+        context.event.preventDefault()
+      }
       return false
     }
     return true
