@@ -82,6 +82,12 @@ typings/
 .nuxt
 dist
 
+# Build outputs in docs folder
+docs/quill.mention.js
+docs/quill.mention.min.js
+docs/quill.mention.css
+docs/quill.mention.min.css
+
 # Gatsby files
 .cache/
 # Comment in the public line in if your project uses Gatsby and *not* Next.js
