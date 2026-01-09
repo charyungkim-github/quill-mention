@@ -5,7 +5,7 @@ import type { Delta, EmitterSource, Range } from "quill/core"
 
 const Module = Quill.import("core/module")
 
-console.log("===== quill-mention :: local =====")
+console.log("===== quill-mention :: local =====1")
 
 export interface MentionOption {
   /**
@@ -31,6 +31,12 @@ export interface MentionOption {
    * @default 0
    */
   minChars: number
+
+  /**
+   * Debounce time in milliseconds for API calls during IME composition
+   * @default 150
+   */
+  debounceTime: number
 
   /**
    * Maximum number of characters after the @ symbol triggering a search request
@@ -190,8 +196,10 @@ export class Mention extends Module<MentionOption> {
   static DEFAULTS: MentionOption = {
     mentionDenotationChars: ["@"],
     showDenotationChar: true,
-    allowedChars: /^[a-zA-Z0-9_]*$/,
+    // Rfice :: Support Korean characters (Hangul) in mention search
+    allowedChars: /^[A-Za-z0-9_가-힣ㄱ-ㅎㅏ-ㅣ]*$/,
     minChars: 0,
+    debounceTime: 150,
     maxChars: 31,
     offsetTop: 2,
     offsetLeft: 0,
@@ -241,6 +249,14 @@ export class Mention extends Module<MentionOption> {
   private existingSourceExecutionToken?: { abandoned: boolean }
   private mentionContainer: HTMLDivElement
   private mentionList: HTMLUListElement
+  // Rfice :: Track composition state for Korean/Japanese/Chinese IME input
+  private isComposing: boolean
+  // Rfice :: IME buffer - the single source of truth for search term during composition
+  private imeBuffer: string
+  // Rfice :: Debounce timer for API calls to reduce excessive requests
+  private sourceDebounceTimer?: ReturnType<typeof setTimeout>
+  // Rfice :: Track last requested search term with position to prevent duplicate API calls
+  private lastRequestedSearchTerm: { term: string; mentionCharPos: number } | null
 
   constructor(quill: Quill, options?: Partial<MentionOption>) {
     super(quill, options)
@@ -248,6 +264,9 @@ export class Mention extends Module<MentionOption> {
     this.itemIndex = 0
     this.values = []
     this.suspendMouseEnter = false
+    this.isComposing = false
+    this.imeBuffer = ""
+    this.lastRequestedSearchTerm = null
 
     if (Array.isArray(options?.dataAttributes)) {
       this.options.dataAttributes = this.options.dataAttributes ? this.options.dataAttributes.concat(options.dataAttributes) : options.dataAttributes
@@ -289,6 +308,35 @@ export class Mention extends Module<MentionOption> {
         const range = quill.getSelection()
         this.onSelectionChange(range)
       })
+    })
+
+    // Rfice :: Add composition event listeners for Korean/Japanese/Chinese IME
+    quill.root.addEventListener("compositionstart", () => {
+      this.isComposing = true
+      this.imeBuffer = "" // Rfice :: Initialize buffer at composition start
+    })
+
+    quill.root.addEventListener("compositionupdate", (e: CompositionEvent) => {
+      // Rfice :: Update buffer with current composing text (e.g., "기", "김")
+      this.imeBuffer = e.data || ""
+      // Rfice :: Call handleIMEInput immediately (debouncing happens inside)
+      this.handleIMEInput()
+    })
+
+    quill.root.addEventListener("compositionend", () => {
+      this.isComposing = false
+
+      // Rfice :: Clear debounce timer to ensure final state is processed
+      if (this.sourceDebounceTimer) {
+        clearTimeout(this.sourceDebounceTimer)
+        this.sourceDebounceTimer = undefined
+      }
+
+      // Rfice :: Give Quill time to commit the text before clearing buffer and recalculating
+      setTimeout(() => {
+        this.imeBuffer = "" // Clear buffer after Quill updates
+        this.onSomethingChange() // Recalculate with final committed text
+      }, 0)
     })
 
     quill.keyboard.addBinding(
@@ -394,6 +442,13 @@ export class Mention extends Module<MentionOption> {
     this.mentionContainer.remove()
     this.setIsOpen(false)
     this.quill.root.removeAttribute("aria-activedescendant")
+    // Rfice :: Reset lastRequestedSearchTerm to allow re-searching same term
+    this.lastRequestedSearchTerm = null
+    // Rfice :: Clear any pending debounced API call
+    if (this.sourceDebounceTimer) {
+      clearTimeout(this.sourceDebounceTimer)
+      this.sourceDebounceTimer = undefined
+    }
   }
 
   highlightItem(scrollItemInView = true) {
@@ -836,6 +891,10 @@ export class Mention extends Module<MentionOption> {
   }
 
   onSomethingChange() {
+    // Rfice :: Prevent conflict during IME composition - handleIMEInput will handle it
+    if (this.isComposing) return
+    this.imeBuffer = "" // Rfice :: Clear buffer when not composing
+
     const range = this.quill.getSelection()
     if (range == null) return
 
@@ -852,6 +911,7 @@ export class Mention extends Module<MentionOption> {
       this.mentionCharPos = mentionCharPos
       const textAfter = textBeforeCursor.substring(mentionCharIndex + mentionChar.length)
       if (textAfter.length >= this.options.minChars! && hasValidChars(textAfter, this.getAllowedCharsRegex(mentionChar))) {
+        // Rfice :: Non-IME path calls API directly (already has 50ms delay from onTextChange)
         if (this.existingSourceExecutionToken) {
           this.existingSourceExecutionToken.abandoned = true
         }
@@ -891,6 +951,107 @@ export class Mention extends Module<MentionOption> {
     } else {
       return this.options.allowedChars?.(denotationChar) ?? /^[a-zA-Z0-9_]*$/
     }
+  }
+
+  // Rfice :: Request source with debouncing and duplicate prevention
+  private requestSource(searchTerm: string, denotationChar: string) {
+    // Rfice :: Clear existing debounce timer
+    if (this.sourceDebounceTimer) {
+      clearTimeout(this.sourceDebounceTimer)
+    }
+
+    // Rfice :: Show loading indicator immediately (not after debounce)
+    this.renderLoading()
+
+    this.sourceDebounceTimer = setTimeout(() => {
+      // Rfice :: Prevent duplicate requests - check both term and position after debounce
+      if (this.lastRequestedSearchTerm && this.lastRequestedSearchTerm.term === searchTerm && this.lastRequestedSearchTerm.mentionCharPos === this.mentionCharPos) {
+        return
+      }
+
+      // Rfice :: Update lastRequestedSearchTerm only when API is actually called
+      this.lastRequestedSearchTerm = {
+        term: searchTerm,
+        mentionCharPos: this.mentionCharPos!,
+      }
+
+      // Rfice :: Cancel any existing source execution
+      if (this.existingSourceExecutionToken) {
+        this.existingSourceExecutionToken.abandoned = true
+      }
+
+      const token = { abandoned: false }
+      this.existingSourceExecutionToken = token
+
+      this.options.source?.(
+        searchTerm,
+        (data, term) => {
+          if (token.abandoned) return
+          this.existingSourceExecutionToken = undefined
+          this.renderList(denotationChar, data, term)
+        },
+        denotationChar
+      )
+    }, this.options.debounceTime ?? 150)
+  }
+
+  // Rfice :: Handle IME input during composition for Korean/Japanese/Chinese
+  // Uses imeBuffer as the single source of truth for search term
+  handleIMEInput() {
+    const range = this.quill.getSelection()
+    if (!range) return
+
+    const maxChars = this.options.maxChars || 31
+    const start = Math.max(0, range.index - maxChars)
+    const textBeforeCursor = this.quill.getText(start, range.index - start)
+
+    // Escape mention trigger characters for regex
+    const mentionChars = this.options.mentionDenotationChars!.map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+
+    // Match mention pattern: trigger char + any non-whitespace chars
+    const regex = new RegExp(`(${mentionChars})([^\\s]*)$`)
+    const match = textBeforeCursor.match(regex)
+
+    // Rfice :: No mention pattern - clean up and return
+    if (!match) {
+      if (this.existingSourceExecutionToken) {
+        this.existingSourceExecutionToken.abandoned = true
+      }
+      if (this.isOpen) {
+        this.hideMentionList()
+      }
+      return
+    }
+
+    const denotationChar = match[1]
+    const committedTerm = match[2]
+
+    // Rfice :: 🔥 Core logic - imeBuffer augments committedTerm during composition
+    // During composition: committedTerm (already committed to Quill) + imeBuffer (current composing)
+    // Not composing: committedTerm only
+    const searchTerm = this.isComposing ? committedTerm + this.imeBuffer : committedTerm
+
+    // Calculate mention position
+    const mentionCharIndex = match.index!
+    const mentionCharPos = range.index - (textBeforeCursor.length - mentionCharIndex)
+
+    this.mentionCharPos = mentionCharPos
+    this.cursorPos = range.index
+
+    // Rfice :: Check minimum length and allowed characters
+    if (searchTerm.length < this.options.minChars! || !hasValidChars(searchTerm, this.getAllowedCharsRegex(denotationChar))) {
+      // Rfice :: Hide mention list if conditions are not met
+      if (this.existingSourceExecutionToken) {
+        this.existingSourceExecutionToken.abandoned = true
+      }
+      if (this.isOpen) {
+        this.hideMentionList()
+      }
+      return
+    }
+
+    // Rfice :: Use requestSource for debouncing and duplicate prevention
+    this.requestSource(searchTerm, denotationChar)
   }
 
   onTextChange(delta: Delta, oldContent: Delta, source: EmitterSource) {
