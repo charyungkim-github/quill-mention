@@ -111,3 +111,4 @@ docs/quill.mention.min.css
 
 # tsimp compiler cache
 .tsimp
+.DS_Store
