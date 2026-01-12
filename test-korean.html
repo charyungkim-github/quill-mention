@@ -99,6 +99,7 @@
           mention: {
             allowedChars: /^[a-zA-Z0-9가-힣\s]*$/,
             mentionDenotationChars: ["@"],
+            isolateCharacter: true,
             source: (searchTerm, renderList) => {
               console.log("🔍 검색어:", searchTerm) // 디버깅용
 
