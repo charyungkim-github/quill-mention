@@ -92,14 +92,14 @@
         { id: "14", value: "Alice Williams" },
       ]
 
-      const quill = new Quill("#editor", {
+      const _quill = new Quill("#editor", {
         theme: "snow",
         placeholder: "@를 입력하여 멘션을 시작하세요...",
         modules: {
           mention: {
             allowedChars: /^[a-zA-Z0-9가-힣\s]*$/,
             mentionDenotationChars: ["@"],
-            source: function (searchTerm, renderList, mentionChar) {
+            source: (searchTerm, renderList) => {
               console.log("🔍 검색어:", searchTerm) // 디버깅용
 
               if (searchTerm.length === 0) {
@@ -115,19 +115,19 @@
                 }
                 console.log(
                   "✅ 검색 결과:",
-                  matches.length + "개",
+                  `${matches.length}개`,
                   matches.map((m) => m.value)
                 ) // 디버깅용
                 renderList(matches, searchTerm)
               }
             },
-            onSelect: function (item, insertItem) {
+            onSelect: (item, insertItem) => {
               console.log("🎯 onSelect 호출됨:", item)
               setTimeout(() => {
                 insertItem(item)
               }, 0)
             },
-            renderItem: function (item, searchTerm) {
+            renderItem: (item, searchTerm) => {
               // 프로필 이미지 + 이름 표시
               const container = document.createElement("div")
               container.style.display = "flex"
