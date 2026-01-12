@@ -11,7 +11,7 @@ import type { Delta, EmitterSource, Range } from "quill/core";
 
 const Module = Quill.import("core/module");
 
-console.log("=== custom quill mention === 1");
+console.log("=== custom quill mention === 2");
 
 export interface MentionOption {
 	/**
@@ -656,6 +656,21 @@ export class Mention extends Module<MentionOption> {
 	) {
 		if (data && data.length > 0) {
 			this.removeLoading();
+
+			// Rfice :: 데이터가 동일하면 재렌더링 건너뛰기 (깜빡임 방지)
+			const isSameData =
+				this.values.length === data.length &&
+				this.values.every(
+					(val, idx) =>
+						val.id === data[idx].id && val.value === data[idx].value,
+				);
+
+			if (isSameData && this.isOpen) {
+				// 데이터가 동일하면 하이라이트만 업데이트
+				this.suspendMouseEnter = true;
+				this.highlightItem();
+				return;
+			}
 
 			this.values = data;
 			this.mentionList.innerText = "";
