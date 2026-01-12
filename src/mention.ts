@@ -1069,53 +1069,97 @@ export class Mention extends Module<MentionOption> {
 		// Rfice :: 실제 입력이 있었음을 기록 (화살표 키와 구분)
 		this.isCompositionUpdated = true;
 
-		// Rfice :: composition 중에는 에디터의 확정된 텍스트 + composition 데이터를 합쳐서 검색
-		if (event.data && this.mentionCharPos !== undefined) {
-			const range = this.quill.getSelection();
-			if (range == null) return;
+		// Rfice :: composition 중에도 멘션 위치 유효성을 재검증
+		const range = this.quill.getSelection();
+		if (range == null) return;
 
-			// Rfice :: @ 위치부터 현재 커서 위치까지의 확정된 텍스트 가져오기
-			const confirmedText = this.quill.getText(
-				this.mentionCharPos,
-				range.index - this.mentionCharPos,
-			);
+		this.cursorPos = range.index;
+		const textBeforeCursor = this.getTextBeforeCursor();
 
-			// Rfice :: @ 다음 텍스트 = 확정된 텍스트에서 @ 제거
-			const confirmedAfterMention = confirmedText.substring(1);
+		const textOffset = Math.max(0, this.cursorPos - this.options.maxChars!);
+		const textPrefix = textOffset
+			? this.quill.getText(textOffset - 1, textOffset)
+			: "";
 
-			// Rfice :: 전체 검색어 = 확정된 텍스트 + 현재 composition 중인 텍스트
-			// 단, event.data에 @ 이후의 모든 텍스트가 포함된 경우가 있으므로 확인 필요
-			const searchTerm = event.data.startsWith(confirmedAfterMention)
-				? event.data
-				: confirmedAfterMention + event.data;
+		const { mentionChar, mentionCharIndex } = getMentionCharIndex(
+			textBeforeCursor,
+			this.options.mentionDenotationChars!,
+			this.options.isolateCharacter!,
+			this.options.allowInlineMentionChar!,
+		);
 
-			// Rfice :: 검색어가 유효한지 확인
-			const mentionChar = "@";
-			if (
-				searchTerm.length >= this.options.minChars! &&
-				hasValidChars(searchTerm, this.getAllowedCharsRegex(mentionChar))
-			) {
-				if (this.existingSourceExecutionToken) {
-					this.existingSourceExecutionToken.abandoned = true;
-				}
+		// Rfice :: 유효한 멘션 위치인지 확인
+		if (
+			mentionChar !== null &&
+			hasValidMentionCharIndex(
+				mentionCharIndex,
+				textBeforeCursor,
+				this.options.isolateCharacter!,
+				textPrefix,
+			)
+		) {
+			const mentionCharPos =
+				this.cursorPos - (textBeforeCursor.length - mentionCharIndex);
+			this.mentionCharPos = mentionCharPos;
 
-				const sourceRequestToken = {
-					abandoned: false,
-				};
-				this.existingSourceExecutionToken = sourceRequestToken;
-
-				this.options.source?.(
-					searchTerm,
-					(data, searchTermFromCallback) => {
-						if (sourceRequestToken.abandoned) {
-							return;
-						}
-						this.existingSourceExecutionToken = undefined;
-						this.renderList(mentionChar, data, searchTermFromCallback);
-					},
-					mentionChar,
+			// Rfice :: composition 중에는 에디터의 확정된 텍스트 + composition 데이터를 합쳐서 검색
+			if (event.data) {
+				// Rfice :: @ 위치부터 현재 커서 위치까지의 확정된 텍스트 가져오기
+				const confirmedText = this.quill.getText(
+					this.mentionCharPos,
+					range.index - this.mentionCharPos,
 				);
+
+				// Rfice :: @ 다음 텍스트 = 확정된 텍스트에서 @ 제거
+				const confirmedAfterMention = confirmedText.substring(
+					mentionChar.length,
+				);
+
+				// Rfice :: 전체 검색어 = 확정된 텍스트 + 현재 composition 중인 텍스트
+				// 단, event.data에 @ 이후의 모든 텍스트가 포함된 경우가 있으므로 확인 필요
+				const searchTerm = event.data.startsWith(confirmedAfterMention)
+					? event.data
+					: confirmedAfterMention + event.data;
+
+				// Rfice :: 검색어가 유효한지 확인
+				if (
+					searchTerm.length >= this.options.minChars! &&
+					hasValidChars(searchTerm, this.getAllowedCharsRegex(mentionChar))
+				) {
+					if (this.existingSourceExecutionToken) {
+						this.existingSourceExecutionToken.abandoned = true;
+					}
+
+					const sourceRequestToken = {
+						abandoned: false,
+					};
+					this.existingSourceExecutionToken = sourceRequestToken;
+
+					this.options.source?.(
+						searchTerm,
+						(data, searchTermFromCallback) => {
+							if (sourceRequestToken.abandoned) {
+								return;
+							}
+							this.existingSourceExecutionToken = undefined;
+							this.renderList(mentionChar, data, searchTermFromCallback);
+						},
+						mentionChar,
+					);
+				} else {
+					// Rfice :: 검색어가 유효하지 않으면 리스트 숨김
+					if (this.existingSourceExecutionToken) {
+						this.existingSourceExecutionToken.abandoned = true;
+					}
+					this.hideMentionList();
+				}
 			}
+		} else {
+			// Rfice :: 유효한 멘션 위치가 아니면 리스트 숨김
+			if (this.existingSourceExecutionToken) {
+				this.existingSourceExecutionToken.abandoned = true;
+			}
+			this.hideMentionList();
 		}
 	}
 
