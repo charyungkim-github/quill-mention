@@ -346,6 +346,24 @@ export class Mention extends Module<MentionOption> {
 			}
 		});
 
+		// Rfice :: document 레벨에서 Escape 키 캡처 (멘션 리스트가 열려있을 때만)
+		// useCapture: true로 상위 컴포넌트(useEscape)보다 먼저 실행
+		const handleEscapeKey = (event: KeyboardEvent) => {
+			if (this.isOpen && event.key === "Escape") {
+				event.preventDefault(); // 브라우저 기본 동작 방지
+				event.stopImmediatePropagation(); // 다른 document 리스너 차단
+
+				// Rfice :: 한글 IME composition 중이라면 다음 compositionend 건너뛰기
+				if (this.isComposing) {
+					this.skipNextCompositionEnd = true;
+				}
+
+				// Rfice :: cleanup: 비동기 검색 취소 + 멘션 리스트 닫기
+				this.escapeHandler();
+			}
+		};
+		document.addEventListener("keydown", handleEscapeKey, true);
+
 		//Pasting doesn't fire selection-change after the pasted text is
 		//inserted, so here we manually trigger one
 		quill.container.addEventListener("paste", () => {
