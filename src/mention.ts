@@ -1069,16 +1069,32 @@ export class Mention extends Module<MentionOption> {
 		// Rfice :: 실제 입력이 있었음을 기록 (화살표 키와 구분)
 		this.isCompositionUpdated = true;
 
-		// composition 중에는 event.data를 사용하여 실시간 검색
+		// Rfice :: composition 중에는 에디터의 확정된 텍스트 + composition 데이터를 합쳐서 검색
 		if (event.data && this.mentionCharPos !== undefined) {
 			const range = this.quill.getSelection();
 			if (range == null) return;
 
-			// @ 이후의 텍스트 = composition 데이터
-			const searchTerm = event.data;
+			// Rfice :: @ 위치부터 현재 커서 위치까지의 확정된 텍스트 가져오기
+			const confirmedText = this.quill.getText(
+				this.mentionCharPos,
+				range.index - this.mentionCharPos,
+			);
 
-			// 검색어가 유효한지 확인
-			if (hasValidChars(searchTerm, this.getAllowedCharsRegex("@"))) {
+			// Rfice :: @ 다음 텍스트 = 확정된 텍스트에서 @ 제거
+			const confirmedAfterMention = confirmedText.substring(1);
+
+			// Rfice :: 전체 검색어 = 확정된 텍스트 + 현재 composition 중인 텍스트
+			// 단, event.data에 @ 이후의 모든 텍스트가 포함된 경우가 있으므로 확인 필요
+			const searchTerm = event.data.startsWith(confirmedAfterMention)
+				? event.data
+				: confirmedAfterMention + event.data;
+
+			// Rfice :: 검색어가 유효한지 확인
+			const mentionChar = "@";
+			if (
+				searchTerm.length >= this.options.minChars! &&
+				hasValidChars(searchTerm, this.getAllowedCharsRegex(mentionChar))
+			) {
 				if (this.existingSourceExecutionToken) {
 					this.existingSourceExecutionToken.abandoned = true;
 				}
@@ -1095,9 +1111,9 @@ export class Mention extends Module<MentionOption> {
 							return;
 						}
 						this.existingSourceExecutionToken = undefined;
-						this.renderList("@", data, searchTermFromCallback);
+						this.renderList(mentionChar, data, searchTermFromCallback);
 					},
-					"@",
+					mentionChar,
 				);
 			}
 		}
