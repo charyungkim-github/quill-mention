@@ -552,9 +552,17 @@ export class Mention extends Module<MentionOption> {
 
 		if (!programmaticInsert) {
 			insertAtPos = this.mentionCharPos;
+
+			// Rfice :: 항상 현재 실제 커서 위치를 사용 (composition 확정 후에도 정확한 삭제)
+			const currentRange = this.quill.getSelection();
+			const actualCursorPos = currentRange
+				? currentRange.index
+				: this.cursorPos;
+			const deleteLength = actualCursorPos - this.mentionCharPos;
+
 			this.quill.deleteText(
 				this.mentionCharPos,
-				this.cursorPos - this.mentionCharPos,
+				deleteLength,
 				Quill.sources.USER,
 			);
 		} else {
