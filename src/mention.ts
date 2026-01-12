@@ -11,6 +11,8 @@ import type { Delta, EmitterSource, Range } from "quill/core";
 
 const Module = Quill.import("core/module");
 
+console.log("=== custom quill mention === 1");
+
 export interface MentionOption {
 	/**
 	 * Specifies which characters will cause the mention autocomplete to open
@@ -264,6 +266,10 @@ export class Mention extends Module<MentionOption> {
 	private mentionList: HTMLUListElement;
 	// Rfice :: 한글 IME composition 상태 추적
 	private isComposing: boolean;
+	// Rfice :: composition 중 실제 업데이트가 있었는지 추적
+	private isCompositionUpdated: boolean;
+	// Rfice :: 다음 compositionend에서 재렌더링 건너뛰기 (화살표 키, 엔터 선택 등)
+	private skipNextCompositionEnd: boolean;
 
 	constructor(quill: Quill, options?: Partial<MentionOption>) {
 		super(quill, options);
@@ -273,6 +279,8 @@ export class Mention extends Module<MentionOption> {
 		this.suspendMouseEnter = false;
 		// Rfice :: 한글 IME composition 상태 초기화
 		this.isComposing = false;
+		this.isCompositionUpdated = false;
+		this.skipNextCompositionEnd = false;
 
 		if (Array.isArray(options?.dataAttributes)) {
 			this.options.dataAttributes = this.options.dataAttributes
@@ -326,6 +334,17 @@ export class Mention extends Module<MentionOption> {
 			"compositionend",
 			this.onCompositionEnd.bind(this),
 		);
+
+		// Rfice :: 화살표 키 감지 (composition 중)
+		quill.root.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (
+				this.isComposing &&
+				this.isOpen &&
+				(event.key === "ArrowUp" || event.key === "ArrowDown")
+			) {
+				this.skipNextCompositionEnd = true;
+			}
+		});
 
 		//Pasting doesn't fire selection-change after the pasted text is
 		//inserted, so here we manually trigger one
@@ -401,6 +420,8 @@ export class Mention extends Module<MentionOption> {
 
 	upHandler() {
 		if (this.isOpen) {
+			// Rfice :: 화살표 키로 compositionend 건너뛰기
+			this.skipNextCompositionEnd = true;
 			this.prevItem();
 			return false;
 		}
@@ -409,6 +430,8 @@ export class Mention extends Module<MentionOption> {
 
 	downHandler() {
 		if (this.isOpen) {
+			// Rfice :: 화살표 키로 compositionend 건너뛰기
+			this.skipNextCompositionEnd = true;
 			this.nextItem();
 			return false;
 		}
@@ -667,6 +690,8 @@ export class Mention extends Module<MentionOption> {
 				);
 			}
 			this.itemIndex = initialSelection;
+			// Rfice :: 리스트 재렌더링 시 마우스 이벤트 차단 (itemIndex 초기화 유지)
+			this.suspendMouseEnter = true;
 			this.highlightItem();
 			this.showMentionList();
 		} else {
@@ -1035,10 +1060,15 @@ export class Mention extends Module<MentionOption> {
 	// Rfice :: 한글 IME composition 시작
 	onCompositionStart() {
 		this.isComposing = true;
+		// Rfice :: composition 업데이트 플래그 초기화
+		this.isCompositionUpdated = false;
 	}
 
 	// Rfice :: 한글 IME composition 중 업데이트 - 실시간 검색 수행
 	onCompositionUpdate(event: CompositionEvent) {
+		// Rfice :: 실제 입력이 있었음을 기록 (화살표 키와 구분)
+		this.isCompositionUpdated = true;
+
 		// composition 중에는 event.data를 사용하여 실시간 검색
 		if (event.data && this.mentionCharPos !== undefined) {
 			const range = this.quill.getSelection();
@@ -1077,14 +1107,21 @@ export class Mention extends Module<MentionOption> {
 	onCompositionEnd() {
 		this.isComposing = false;
 
-		// Rfice :: 멘션 리스트가 이미 열려있고 아이템이 있으면 재렌더링하지 않음
-		// (화살표 키로 인한 composition 종료 시 itemIndex 유지)
-		if (!this.isOpen || this.values.length === 0) {
-			// composition 종료 후 최종 검색
+		// Rfice :: 다음 compositionend를 건너뛰어야 하는 경우 (화살표 키, 엔터 선택 등)
+		if (this.skipNextCompositionEnd) {
+			this.skipNextCompositionEnd = false;
+			return;
+		}
+
+		// Rfice :: 리스트가 열려있고 실제 업데이트가 있었으면 재렌더링
+		if (this.isOpen && this.isCompositionUpdated) {
 			setTimeout(() => {
 				this.onSomethingChange();
 			}, 0);
 		}
+
+		// Rfice :: 플래그 리셋
+		this.isCompositionUpdated = false;
 	}
 
 	onTextChange(delta: Delta, oldContent: Delta, source: EmitterSource) {
