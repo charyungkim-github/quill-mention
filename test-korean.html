@@ -121,12 +121,6 @@
                 renderList(matches, searchTerm)
               }
             },
-            onSelect: (item, insertItem) => {
-              console.log("🎯 onSelect 호출됨:", item)
-              setTimeout(() => {
-                insertItem(item)
-              }, 0)
-            },
             renderItem: (item, searchTerm) => {
               // 프로필 이미지 + 이름 표시
               const container = document.createElement("div")
