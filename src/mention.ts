@@ -11,8 +11,6 @@ import type { Delta, EmitterSource, Range } from "quill/core";
 
 const Module = Quill.import("core/module");
 
-console.log("=== custom quill mention === 2");
-
 export interface MentionOption {
 	/**
 	 * Specifies which characters will cause the mention autocomplete to open
