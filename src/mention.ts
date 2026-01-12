@@ -5,13 +5,11 @@ import {
 	getMentionCharIndex,
 	hasValidChars,
 	hasValidMentionCharIndex,
-	setInnerContent
+	setInnerContent,
 } from "./utils";
 import type { Delta, EmitterSource, Range } from "quill/core";
 
 const Module = Quill.import("core/module");
-
-console.log("==========4	");
 
 export interface MentionOption {
 	/**
@@ -148,9 +146,9 @@ export interface MentionOption {
 				value: string;
 				[key: string]: string | undefined;
 			}[],
-			searchTerm: string
+			searchTerm: string,
 		) => void,
-		mentionChar: string
+		mentionChar: string,
 	) => void;
 
 	/**
@@ -178,7 +176,7 @@ export interface MentionOption {
 	 */
 	renderItem: (
 		item: { id: string; value: string; [key: string]: unknown },
-		searchTerm: string
+		searchTerm: string,
 	) => string | HTMLElement;
 
 	/**
@@ -194,7 +192,11 @@ export interface MentionOption {
 	 */
 	onSelect: (
 		item: DOMStringMap,
-		insertItem: (data: Record<string, unknown>, programmaticInsert?: boolean, overriddenOptions?: object) => void
+		insertItem: (
+			data: Record<string, unknown>,
+			programmaticInsert?: boolean,
+			overriddenOptions?: object,
+		) => void,
 	) => void;
 }
 
@@ -213,7 +215,14 @@ export class Mention extends Module<MentionOption> {
 		positioningStrategy: "normal",
 		defaultMenuOrientation: "bottom",
 		blotName: "mention",
-		dataAttributes: ["id", "value", "denotationChar", "link", "target", "disabled"],
+		dataAttributes: [
+			"id",
+			"value",
+			"denotationChar",
+			"link",
+			"target",
+			"disabled",
+		],
 		linkTarget: "_blank",
 		listItemClass: "ql-mention-list-item",
 		mentionContainerClass: "ql-mention-list-container",
@@ -227,7 +236,7 @@ export class Mention extends Module<MentionOption> {
 					value: string;
 					[key: string]: string | undefined;
 				}[],
-				searchTerm
+				searchTerm,
 			);
 		},
 		renderItem: ({ value }) => `${value}`,
@@ -235,7 +244,7 @@ export class Mention extends Module<MentionOption> {
 		onOpen: () => true,
 		onBeforeClose: () => true,
 		onClose: () => true,
-		renderLoading: () => null
+		renderLoading: () => null,
 	};
 
 	private isOpen: boolean;
@@ -253,6 +262,8 @@ export class Mention extends Module<MentionOption> {
 	private existingSourceExecutionToken?: { abandoned: boolean };
 	private mentionContainer: HTMLDivElement;
 	private mentionList: HTMLUListElement;
+	// Rfice :: 한글 IME composition 상태 추적
+	private isComposing: boolean;
 
 	constructor(quill: Quill, options?: Partial<MentionOption>) {
 		super(quill, options);
@@ -260,6 +271,8 @@ export class Mention extends Module<MentionOption> {
 		this.itemIndex = 0;
 		this.values = [];
 		this.suspendMouseEnter = false;
+		// Rfice :: 한글 IME composition 상태 초기화
+		this.isComposing = false;
 
 		if (Array.isArray(options?.dataAttributes)) {
 			this.options.dataAttributes = this.options.dataAttributes
@@ -279,7 +292,9 @@ export class Mention extends Module<MentionOption> {
 
 		//create mention container
 		this.mentionContainer = document.createElement("div");
-		this.mentionContainer.className = this.options.mentionContainerClass ? this.options.mentionContainerClass : "";
+		this.mentionContainer.className = this.options.mentionContainerClass
+			? this.options.mentionContainerClass
+			: "";
 		this.mentionContainer.style.cssText = "display: none; position: absolute;";
 		this.mentionContainer.onmousemove = this.onContainerMouseMove.bind(this);
 
@@ -290,11 +305,27 @@ export class Mention extends Module<MentionOption> {
 		this.mentionList = document.createElement("ul");
 		this.mentionList.id = "quill-mention-list";
 		quill.root.setAttribute("aria-owns", "quill-mention-list");
-		this.mentionList.className = this.options.mentionListClass ? this.options.mentionListClass : "";
+		this.mentionList.className = this.options.mentionListClass
+			? this.options.mentionListClass
+			: "";
 		this.mentionContainer.appendChild(this.mentionList);
 
 		quill.on("text-change", this.onTextChange.bind(this));
 		quill.on("selection-change", this.onSelectionChange.bind(this));
+
+		// Rfice :: 한글 IME composition 이벤트 리스너 등록
+		quill.root.addEventListener(
+			"compositionstart",
+			this.onCompositionStart.bind(this),
+		);
+		quill.root.addEventListener(
+			"compositionupdate",
+			this.onCompositionUpdate.bind(this),
+		);
+		quill.root.addEventListener(
+			"compositionend",
+			this.onCompositionEnd.bind(this),
+		);
 
 		//Pasting doesn't fire selection-change after the pasted text is
 		//inserted, so here we manually trigger one
@@ -307,41 +338,45 @@ export class Mention extends Module<MentionOption> {
 
 		quill.keyboard.addBinding(
 			{
-				key: Keys.TAB
+				key: Keys.TAB,
 			},
-			this.selectHandler.bind(this)
+			this.selectHandler.bind(this),
 		);
-		quill.keyboard.bindings[Keys.TAB].unshift(quill.keyboard.bindings[Keys.TAB].pop()!);
+		quill.keyboard.bindings[Keys.TAB].unshift(
+			quill.keyboard.bindings[Keys.TAB].pop()!,
+		);
 
 		for (let selectKey of this.options.selectKeys ?? []) {
 			quill.keyboard.addBinding(
 				{
-					key: selectKey
+					key: selectKey,
 				},
-				this.selectHandler.bind(this)
+				this.selectHandler.bind(this),
 			);
 		}
-		quill.keyboard.bindings[Keys.ENTER].unshift(quill.keyboard.bindings[Keys.ENTER].pop()!);
-
-		quill.keyboard.addBinding(
-			{
-				key: Keys.ESCAPE
-			},
-			this.escapeHandler.bind(this)
+		quill.keyboard.bindings[Keys.ENTER].unshift(
+			quill.keyboard.bindings[Keys.ENTER].pop()!,
 		);
 
 		quill.keyboard.addBinding(
 			{
-				key: Keys.UP
+				key: Keys.ESCAPE,
 			},
-			this.upHandler.bind(this)
+			this.escapeHandler.bind(this),
 		);
 
 		quill.keyboard.addBinding(
 			{
-				key: Keys.DOWN
+				key: Keys.UP,
 			},
-			this.downHandler.bind(this)
+			this.upHandler.bind(this),
+		);
+
+		quill.keyboard.addBinding(
+			{
+				key: Keys.DOWN,
+			},
+			this.downHandler.bind(this),
 		);
 	}
 
@@ -365,7 +400,7 @@ export class Mention extends Module<MentionOption> {
 	}
 
 	upHandler() {
-		if (this.isOpen && !this.existingSourceExecutionToken) {
+		if (this.isOpen) {
 			this.prevItem();
 			return false;
 		}
@@ -373,7 +408,7 @@ export class Mention extends Module<MentionOption> {
 	}
 
 	downHandler() {
-		if (this.isOpen && !this.existingSourceExecutionToken) {
+		if (this.isOpen) {
 			this.nextItem();
 			return false;
 		}
@@ -412,13 +447,21 @@ export class Mention extends Module<MentionOption> {
 			}
 		}
 
-		const elementAtItemIndex = this.mentionList.childNodes[this.itemIndex] as HTMLElement;
-		if (this.itemIndex === -1 || elementAtItemIndex.dataset.disabled === "true") {
+		const elementAtItemIndex = this.mentionList.childNodes[
+			this.itemIndex
+		] as HTMLElement;
+		if (
+			this.itemIndex === -1 ||
+			elementAtItemIndex.dataset.disabled === "true"
+		) {
 			return;
 		}
 
 		elementAtItemIndex.classList.add("selected");
-		this.quill.root.setAttribute("aria-activedescendant", elementAtItemIndex.id);
+		this.quill.root.setAttribute(
+			"aria-activedescendant",
+			elementAtItemIndex.id,
+		);
 
 		if (scrollItemInView) {
 			const itemHeight = elementAtItemIndex.offsetHeight;
@@ -431,7 +474,8 @@ export class Mention extends Module<MentionOption> {
 				this.mentionContainer.scrollTop = itemPos;
 			} else if (itemPos > containerBottom - itemHeight) {
 				// scroll down if any part of the element is below the bottom of the container
-				this.mentionContainer.scrollTop += itemPos - containerBottom + itemHeight;
+				this.mentionContainer.scrollTop +=
+					itemPos - containerBottom + itemHeight;
 			}
 		}
 	}
@@ -444,20 +488,37 @@ export class Mention extends Module<MentionOption> {
 		if (this.itemIndex === -1) {
 			return;
 		}
-		const elementAtItemIndex = this.mentionList.childNodes[this.itemIndex] as HTMLElement;
+		const elementAtItemIndex = this.mentionList.childNodes[
+			this.itemIndex
+		] as HTMLElement;
 		const data = elementAtItemIndex.dataset;
 		if (data.disabled) {
 			return;
 		}
-		this.options.onSelect?.(data, (asyncData, programmaticInsert = false, overriddenOptions = {}) => {
-			return this.insertItem(asyncData, programmaticInsert, overriddenOptions);
-		});
+		this.options.onSelect?.(
+			data,
+			(asyncData, programmaticInsert = false, overriddenOptions = {}) => {
+				return this.insertItem(
+					asyncData,
+					programmaticInsert,
+					overriddenOptions,
+				);
+			},
+		);
 		this.hideMentionList();
 	}
 
-	insertItem(data: { [key: string]: unknown } | null, programmaticInsert: boolean, overriddenOptions = {}) {
+	insertItem(
+		data: { [key: string]: unknown } | null,
+		programmaticInsert: boolean,
+		overriddenOptions = {},
+	) {
 		const render = data;
-		if (render === null || this.mentionCharPos === undefined || this.cursorPos === undefined) {
+		if (
+			render === null ||
+			this.mentionCharPos === undefined ||
+			this.cursorPos === undefined
+		) {
 			return;
 		}
 		const options = { ...this.options, ...overriddenOptions };
@@ -470,7 +531,11 @@ export class Mention extends Module<MentionOption> {
 
 		if (!programmaticInsert) {
 			insertAtPos = this.mentionCharPos;
-			this.quill.deleteText(this.mentionCharPos, this.cursorPos - this.mentionCharPos, Quill.sources.USER);
+			this.quill.deleteText(
+				this.mentionCharPos,
+				this.cursorPos - this.mentionCharPos,
+				Quill.sources.USER,
+			);
 		} else {
 			insertAtPos = this.cursorPos;
 		}
@@ -478,7 +543,7 @@ export class Mention extends Module<MentionOption> {
 			insertAtPos,
 			options.blotName ?? Mention.DEFAULTS.blotName,
 			render,
-			Quill.sources.USER
+			Quill.sources.USER,
 		);
 		if (options.spaceAfterInsert) {
 			this.quill.insertText(insertAtPos + 1, " ", Quill.sources.USER);
@@ -519,7 +584,9 @@ export class Mention extends Module<MentionOption> {
 		if (e.currentTarget instanceof HTMLElement === false) {
 			return;
 		}
-		this.itemIndex = e.currentTarget?.dataset.index ? Number.parseInt(e.currentTarget.dataset.index) : -1;
+		this.itemIndex = e.currentTarget?.dataset.index
+			? Number.parseInt(e.currentTarget.dataset.index)
+			: -1;
 		this.highlightItem();
 		this.selectItem();
 	}
@@ -535,7 +602,10 @@ export class Mention extends Module<MentionOption> {
 			return;
 		}
 
-		if (this.mentionContainer.getElementsByClassName("ql-mention-loading").length > 0) {
+		if (
+			this.mentionContainer.getElementsByClassName("ql-mention-loading")
+				.length > 0
+		) {
 			this.showMentionList();
 			return;
 		}
@@ -549,7 +619,8 @@ export class Mention extends Module<MentionOption> {
 	}
 
 	removeLoading() {
-		const loadingDiv = this.mentionContainer.getElementsByClassName("ql-mention-loading");
+		const loadingDiv =
+			this.mentionContainer.getElementsByClassName("ql-mention-loading");
 		if (loadingDiv.length > 0) {
 			loadingDiv[0].remove();
 		}
@@ -558,7 +629,7 @@ export class Mention extends Module<MentionOption> {
 	renderList(
 		mentionChar: string,
 		data: { id: string; value: string; [key: string]: string | undefined }[],
-		searchTerm: string
+		searchTerm: string,
 	) {
 		if (data && data.length > 0) {
 			this.removeLoading();
@@ -571,7 +642,9 @@ export class Mention extends Module<MentionOption> {
 			for (let i = 0; i < data.length; i += 1) {
 				const li = document.createElement("li");
 				li.id = "quill-mention-item-" + i;
-				li.className = this.options.listItemClass ? this.options.listItemClass : "";
+				li.className = this.options.listItemClass
+					? this.options.listItemClass
+					: "";
 				if (data[i].disabled) {
 					li.className += " disabled";
 					li.setAttribute("aria-hidden", "true");
@@ -589,7 +662,9 @@ export class Mention extends Module<MentionOption> {
 					li.onmouseenter = this.onDisabledItemMouseEnter.bind(this);
 				}
 				li.dataset.denotationChar = mentionChar;
-				this.mentionList.appendChild(attachDataValues(li, data[i], this.options.dataAttributes!));
+				this.mentionList.appendChild(
+					attachDataValues(li, data[i], this.options.dataAttributes!),
+				);
 			}
 			this.itemIndex = initialSelection;
 			this.highlightItem();
@@ -606,7 +681,9 @@ export class Mention extends Module<MentionOption> {
 		do {
 			increment++;
 			newIndex = (this.itemIndex + increment) % this.values.length;
-			disabled = (this.mentionList.childNodes[newIndex] as HTMLElement).dataset.disabled === "true";
+			disabled =
+				(this.mentionList.childNodes[newIndex] as HTMLElement).dataset
+					.disabled === "true";
 			if (increment === this.values.length + 1) {
 				//we've wrapped around w/o finding an enabled item
 				newIndex = -1;
@@ -625,8 +702,11 @@ export class Mention extends Module<MentionOption> {
 		let disabled: boolean;
 		do {
 			decrement++;
-			newIndex = (this.itemIndex + this.values.length - decrement) % this.values.length;
-			disabled = (this.mentionList.childNodes[newIndex] as HTMLElement).dataset.disabled === "true";
+			newIndex =
+				(this.itemIndex + this.values.length - decrement) % this.values.length;
+			disabled =
+				(this.mentionList.childNodes[newIndex] as HTMLElement).dataset
+					.disabled === "true";
 			if (decrement === this.values.length + 1) {
 				//we've wrapped around w/o finding an enabled item
 				newIndex = -1;
@@ -640,7 +720,8 @@ export class Mention extends Module<MentionOption> {
 	}
 
 	containerBottomIsNotVisible(topPos: number, containerPos: DOMRect) {
-		const mentionContainerBottom = topPos + this.mentionContainer.offsetHeight + containerPos.top;
+		const mentionContainerBottom =
+			topPos + this.mentionContainer.offsetHeight + containerPos.top;
 		return mentionContainerBottom > window.scrollY + window.innerHeight;
 	}
 
@@ -649,7 +730,8 @@ export class Mention extends Module<MentionOption> {
 			return false;
 		}
 
-		const rightPos = leftPos + this.mentionContainer.offsetWidth + containerPos.left;
+		const rightPos =
+			leftPos + this.mentionContainer.offsetWidth + containerPos.left;
 		const browserWidth = window.scrollX + document.documentElement.clientWidth;
 		return rightPos > browserWidth;
 	}
@@ -696,7 +778,8 @@ export class Mention extends Module<MentionOption> {
 		}
 
 		if (this.containerRightIsNotVisible(leftPos, containerPos)) {
-			const containerWidth = this.mentionContainer.offsetWidth + this.options.offsetLeft!;
+			const containerWidth =
+				this.mentionContainer.offsetWidth + this.options.offsetLeft!;
 			const quillWidth = containerPos.width;
 			leftPos = quillWidth - containerWidth;
 		}
@@ -707,7 +790,8 @@ export class Mention extends Module<MentionOption> {
 			if (this.options.fixMentionsToQuill) {
 				topPos = -1 * (containerHeight + this.options.offsetTop!);
 			} else {
-				topPos = mentionCharPos.top - (containerHeight + this.options.offsetTop!);
+				topPos =
+					mentionCharPos.top - (containerHeight + this.options.offsetTop!);
 			}
 
 			// default to bottom if the top is not visible
@@ -776,11 +860,13 @@ export class Mention extends Module<MentionOption> {
 			left: containerPos.left + mentionCharPos.left,
 			top: containerPos.top + mentionCharPos.top,
 			width: 0,
-			height: mentionCharPos.height
+			height: mentionCharPos.height,
 		};
 
 		//Which rectangle should it be relative to
-		const relativeToPos = this.options.fixMentionsToQuill ? containerPos : mentionCharPosAbsolute;
+		const relativeToPos = this.options.fixMentionsToQuill
+			? containerPos
+			: mentionCharPosAbsolute;
 
 		let topPos = this.options.offsetTop!;
 		let leftPos = this.options.offsetLeft!;
@@ -793,15 +879,24 @@ export class Mention extends Module<MentionOption> {
 			leftPos += relativeToPos.left;
 
 			//if its off the righ edge, push it back
-			if (leftPos + this.mentionContainer.offsetWidth > document.documentElement.clientWidth) {
-				leftPos -= leftPos + this.mentionContainer.offsetWidth - document.documentElement.clientWidth;
+			if (
+				leftPos + this.mentionContainer.offsetWidth >
+				document.documentElement.clientWidth
+			) {
+				leftPos -=
+					leftPos +
+					this.mentionContainer.offsetWidth -
+					document.documentElement.clientWidth;
 			}
 		}
 
 		const availableSpaceTop = relativeToPos.top;
-		const availableSpaceBottom = document.documentElement.clientHeight - (relativeToPos.top + relativeToPos.height);
+		const availableSpaceBottom =
+			document.documentElement.clientHeight -
+			(relativeToPos.top + relativeToPos.height);
 
-		const fitsBottom = this.mentionContainer.offsetHeight <= availableSpaceBottom;
+		const fitsBottom =
+			this.mentionContainer.offsetHeight <= availableSpaceBottom;
 		const fitsTop = this.mentionContainer.offsetHeight <= availableSpaceTop;
 
 		let placement: "top" | "bottom";
@@ -847,8 +942,14 @@ export class Mention extends Module<MentionOption> {
 	}
 
 	getTextBeforeCursor() {
-		const startPos = Math.max(0, (this.cursorPos ?? 0) - this.options.maxChars!);
-		const textBeforeCursorPos = this.quill.getText(startPos, (this.cursorPos ?? 0) - startPos);
+		const startPos = Math.max(
+			0,
+			(this.cursorPos ?? 0) - this.options.maxChars!,
+		);
+		const textBeforeCursorPos = this.quill.getText(
+			startPos,
+			(this.cursorPos ?? 0) - startPos,
+		);
 		return textBeforeCursorPos;
 	}
 
@@ -860,22 +961,32 @@ export class Mention extends Module<MentionOption> {
 		const textBeforeCursor = this.getTextBeforeCursor();
 
 		const textOffset = Math.max(0, this.cursorPos - this.options.maxChars!);
-		const textPrefix = textOffset ? this.quill.getText(textOffset - 1, textOffset) : "";
+		const textPrefix = textOffset
+			? this.quill.getText(textOffset - 1, textOffset)
+			: "";
 
 		const { mentionChar, mentionCharIndex } = getMentionCharIndex(
 			textBeforeCursor,
 			this.options.mentionDenotationChars!,
 			this.options.isolateCharacter!,
-			this.options.allowInlineMentionChar!
+			this.options.allowInlineMentionChar!,
 		);
 
 		if (
 			mentionChar !== null &&
-			hasValidMentionCharIndex(mentionCharIndex, textBeforeCursor, this.options.isolateCharacter!, textPrefix)
+			hasValidMentionCharIndex(
+				mentionCharIndex,
+				textBeforeCursor,
+				this.options.isolateCharacter!,
+				textPrefix,
+			)
 		) {
-			const mentionCharPos = this.cursorPos - (textBeforeCursor.length - mentionCharIndex);
+			const mentionCharPos =
+				this.cursorPos - (textBeforeCursor.length - mentionCharIndex);
 			this.mentionCharPos = mentionCharPos;
-			const textAfter = textBeforeCursor.substring(mentionCharIndex + mentionChar.length);
+			const textAfter = textBeforeCursor.substring(
+				mentionCharIndex + mentionChar.length,
+			);
 			if (
 				textAfter.length >= this.options.minChars! &&
 				hasValidChars(textAfter, this.getAllowedCharsRegex(mentionChar))
@@ -885,7 +996,7 @@ export class Mention extends Module<MentionOption> {
 				}
 				this.renderLoading();
 				const sourceRequestToken = {
-					abandoned: false
+					abandoned: false,
 				};
 				this.existingSourceExecutionToken = sourceRequestToken;
 				this.options.source?.(
@@ -897,7 +1008,7 @@ export class Mention extends Module<MentionOption> {
 						this.existingSourceExecutionToken = undefined;
 						this.renderList(mentionChar, data, searchTerm);
 					},
-					mentionChar
+					mentionChar,
 				);
 			} else {
 				if (this.existingSourceExecutionToken) {
@@ -921,9 +1032,67 @@ export class Mention extends Module<MentionOption> {
 		}
 	}
 
+	// Rfice :: 한글 IME composition 시작
+	onCompositionStart() {
+		this.isComposing = true;
+	}
+
+	// Rfice :: 한글 IME composition 중 업데이트 - 실시간 검색 수행
+	onCompositionUpdate(event: CompositionEvent) {
+		// composition 중에는 event.data를 사용하여 실시간 검색
+		if (event.data && this.mentionCharPos !== undefined) {
+			const range = this.quill.getSelection();
+			if (range == null) return;
+
+			// @ 이후의 텍스트 = composition 데이터
+			const searchTerm = event.data;
+
+			// 검색어가 유효한지 확인
+			if (hasValidChars(searchTerm, this.getAllowedCharsRegex("@"))) {
+				if (this.existingSourceExecutionToken) {
+					this.existingSourceExecutionToken.abandoned = true;
+				}
+
+				const sourceRequestToken = {
+					abandoned: false,
+				};
+				this.existingSourceExecutionToken = sourceRequestToken;
+
+				this.options.source?.(
+					searchTerm,
+					(data, searchTermFromCallback) => {
+						if (sourceRequestToken.abandoned) {
+							return;
+						}
+						this.existingSourceExecutionToken = undefined;
+						this.renderList("@", data, searchTermFromCallback);
+					},
+					"@",
+				);
+			}
+		}
+	}
+
+	// Rfice :: 한글 IME composition 종료
+	onCompositionEnd() {
+		this.isComposing = false;
+
+		// Rfice :: 멘션 리스트가 이미 열려있고 아이템이 있으면 재렌더링하지 않음
+		// (화살표 키로 인한 composition 종료 시 itemIndex 유지)
+		if (!this.isOpen || this.values.length === 0) {
+			// composition 종료 후 최종 검색
+			setTimeout(() => {
+				this.onSomethingChange();
+			}, 0);
+		}
+	}
+
 	onTextChange(delta: Delta, oldContent: Delta, source: EmitterSource) {
 		if (source === "user") {
-			setTimeout(this.onSomethingChange.bind(this), 50);
+			// Rfice :: composition 중에는 onTextChange에서 검색하지 않음 (compositionupdate에서 처리)
+			if (!this.isComposing) {
+				setTimeout(this.onSomethingChange.bind(this), 50);
+			}
 		}
 	}
 

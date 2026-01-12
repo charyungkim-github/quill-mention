@@ -107,8 +107,9 @@
                 renderList(koreanNames, searchTerm)
               } else {
                 const matches = []
+                const searchTermLower = searchTerm.toLowerCase() // 대소문자 무시 검색
                 for (let i = 0; i < koreanNames.length; i++) {
-                  if (koreanNames[i].value.includes(searchTerm)) {
+                  if (koreanNames[i].value.toLowerCase().includes(searchTermLower)) {
                     matches.push(koreanNames[i])
                   }
                 }
